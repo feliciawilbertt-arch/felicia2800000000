@@ -1,0 +1,1260 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rainbow Dungeon</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0b1020;
+  color: white;
+  font-family: monospace;
+  text-align: center;
+  padding: 16px;
+}
+
+h1 { color: #facc15; }
+
+.game-layout {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.panel {
+  background: #151f32;
+  border: 2px solid #475569;
+  border-radius: 10px;
+  padding: 14px;
+  min-width: 150px;
+}
+
+#stats { line-height: 2; font-size: 16px; }
+
+canvas {
+  width: min(90vw, 600px);
+  height: auto;
+  border: 4px solid #64748b;
+  border-radius: 6px;
+  image-rendering: pixelated;
+  background: #101827;
+  touch-action: none;
+}
+
+button {
+  background: #26364f;
+  color: white;
+  border: 2px solid #64748b;
+  border-radius: 9px;
+  font-size: 23px;
+  min-width: 58px;
+  min-height: 54px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:active { background: #0ea5e9; }
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(3, 62px);
+  gap: 7px;
+  justify-content: center;
+  margin: 18px auto;
+}
+
+.empty { visibility: hidden; }
+
+#message {
+  min-height: 24px;
+  color: #facc15;
+  font-size: 16px;
+}
+
+#restart {
+  font-size: 16px;
+  padding: 10px 20px;
+}
+
+@media (max-width: 500px) {
+  body { padding: 8px; }
+  .panel { min-width: 0; }
+  .game-layout { gap: 8px; }
+}
+</style>
+</head>
+
+<body>
+
+<h1>🌈 Rainbow Dungeon</h1>
+
+<div class="game-layout">
+  <div class="panel" id="stats">
+    ❤️ <span id="health">5</span><br>
+    ⚔️ Enemies: <span id="enemyCount">3</span><br>
+    👣 Steps: <span id="steps">0</span>
+    <hr>
+    <small>Find the green exit to win!</small>
+  </div>
+
+  <canvas id="game" width="600" height="600"></canvas>
+
+  <div class="panel">
+    <strong>HOW TO PLAY</strong>
+    <p>WASD / Arrow keys</p>
+    <p>Move around</p>
+    <p>Touch enemies to fight</p>
+    <p>Reach the green exit</p>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="empty"></button>
+  <button data-dir="up">▲</button>
+  <button class="empty"></button>
+  <button data-dir="left">◀</button>
+  <button data-dir="down">▼</button>
+  <button data-dir="right">▶</button>
+</div>
+
+<p id="message">Explore the dungeon and find the exit!</p>
+<button id="restart">Restart Game</button>
+
+<script>
+(() => {
+"use strict";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const TILE = 40;
+const COLS = 15;
+const ROWS = 15;
+
+const mapData = [
+"###############",
+"#P....#.......#",
+"#.##..#..###..#",
+"#.....#......X#",
+"###.#####.##..#",
+"#...#.....#...#",
+"#.#.#.###.#.#.#",
+"#...#.....#...#",
+"#.#####.###.#.#",
+"#.............#",
+"#.#####.###.#.#",
+"#.....#...#...#",
+"#.##..#...#.#.#",
+"#.............#",
+"###############"
+];
+
+let map, player, enemies, health, steps, state;
+let lastTime = 0;
+let animationTime = 0;
+
+const healthEl = document.getElementById("health");
+const enemyEl = document.getElementById("enemyCount");
+const stepsEl = document.getElementById("steps");
+const messageEl = document.getElementById("message");
+
+function startGame() {
+  map = mapData.map(row => row.split(""));
+  player = { x: 1, y: 1, invulnerable: 0 };
+  health = 5;
+  steps = 0;
+  state = "playing";
+
+  enemies = [
+    { x: 9, y: 3, moveTimer: 0 },
+    { x: 2, y: 9, moveTimer: 0 },
+    { x: 12, y: 13, moveTimer: 0 }
+  ];
+
+  messageEl.textContent = "Explore the dungeon and find the exit!";
+  updateStats();
+  draw();
+}
+
+function updateStats() {
+  healthEl.textContent = "❤️".repeat(health) || "0";
+  enemyEl.textContent = enemies.length;
+  stepsEl.textContent = steps;
+}
+
+function isWall(x, y) {
+  return (
+    x < 0 || y < 0 ||
+    x >= COLS || y >= ROWS ||
+    map[y][x] === "#"
+  );
+}
+
+function movePlayer(dx, dy) {
+  if (state !== "playing") return;
+
+  const nx = player.x + dx;
+  const ny = player.y + dy;
+
+  if (isWall(nx, ny)) {
+    messageEl.textContent = "A stone wall blocks your way!";
+    return;
+  }
+
+  steps++;
+
+  if (map[ny][nx] === "X") {
+    player.x = nx;
+    player.y = ny;
+    state = "won";
+    messageEl.textContent = "🏆 You escaped the dungeon! You win!";
+    updateStats();
+    draw();
+    return;
+  }
+
+  const enemy = enemies.find(e => e.x === nx && e.y === ny);
+
+  if (enemy) {
+    // Attacking an enemy costs one health.
+    health--;
+    player.invulnerable = 0.5;
+
+    // Defeat the enemy with one hit.
+    enemies = enemies.filter(e => e !== enemy);
+
+    if (health <= 0) {
+      health = 0;
+      state = "lost";
+      messageEl.textContent = "💀 Game over! Press Restart to try again.";
+    } else {
+      messageEl.textContent = "⚔️ You defeated an enemy, but lost 1 heart!";
+    }
+
+    updateStats();
+    draw();
+    return;
+  }
+
+  player.x = nx;
+  player.y = ny;
+
+  updateStats();
+  draw();
+}
+
+function moveEnemies(dt) {
+  if (state !== "playing") return;
+
+  for (const enemy of enemies) {
+    enemy.moveTimer += dt;
+
+    if (enemy.moveTimer < 0.65) continue;
+    enemy.moveTimer = 0;
+
+    // Try to move closer to the player.
+    const dx = player.x - enemy.x;
+    const dy = player.y - enemy.y;
+
+    let choices = [];
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      if (dx !== 0) choices.push([Math.sign(dx), 0]);
+      if (dy !== 0) choices.push([0, Math.sign(dy)]);
+    } else {
+      if (dy !== 0) choices.push([0, Math.sign(dy)]);
+      if (dx !== 0) choices.push([Math.sign(dx), 0]);
+    }
+
+    // Occasionally wander in a different direction.
+    const randomDirections = [
+      [0, -1], [0, 1], [-1, 0], [1, 0]
+    ];
+    choices.push(
+      randomDirections[Math.floor(Math.random() * 4)]
+    );
+
+    for (const [mx, my] of choices) {
+      const nx = enemy.x + mx;
+      const ny = enemy.y + my;
+
+      if (isWall(nx, ny)) continue;
+      if (enemies.some(e => e !== enemy && e.x === nx && e.y === ny)) continue;
+
+      // Enemies do not occupy the player's tile.
+      if (nx === player.x && ny === player.y) continue;
+
+      enemy.x = nx;
+      enemy.y = ny;
+      break;
+    }
+  }
+}
+
+function drawFloor(x, y) {
+  const px = x * TILE;
+  const py = y * TILE;
+
+  ctx.fillStyle = (x + y) % 2 ? "#172337" : "#1b293d";
+  ctx.fillRect(px, py, TILE, TILE);
+
+  ctx.strokeStyle = "#0b1220";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+
+  ctx.fillStyle = "#253247";
+  ctx.fillRect(px + 7, py + 7, 2, 2);
+  ctx.fillRect(px + 29, py + 25, 3, 2);
+}
+
+function drawWall(x, y) {
+  const px = x * TILE;
+  const py = y * TILE;
+
+  ctx.fillStyle = "#56647a";
+  ctx.fillRect(px, py, TILE, TILE);
+
+  ctx.fillStyle = "#718096";
+  ctx.fillRect(px + 3, py + 3, TILE - 6, 5);
+  ctx.fillRect(px + 3, py + 8, 5, TILE - 11);
+
+  ctx.fillStyle = "#354258";
+  ctx.fillRect(px + 5, py + TILE - 8, TILE - 8, 5);
+  ctx.fillRect(px + TILE - 8, py + 8, 5, TILE - 16);
+
+  ctx.strokeStyle = "#263247";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+
+  ctx.fillStyle = "#8995a7";
+  ctx.fillRect(px + 13, py + 15, 3, 3);
+  ctx.fillRect(px + 28, py + 10, 2, 2);
+}
+
+function drawExit(x, y) {
+  const px = x * TILE;
+  const py = y * TILE;
+
+  ctx.fillStyle = "#14532d";
+  ctx.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
+
+  ctx.strokeStyle = "#4ade80";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(px + 7, py + 7, TILE - 14, TILE - 14);
+
+  ctx.strokeStyle = "#86efac";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(px + 12, py + 12);
+  ctx.lineTo(px + 28, py + 28);
+  ctx.moveTo(px + 28, py + 12);
+  ctx.lineTo(px + 12, py + 28);
+  ctx.stroke();
+}
+
+function drawPlayer() {
+  const cx = player.x * TILE + TILE / 2;
+  const cy = player.y * TILE + TILE / 2;
+  const hue = (animationTime * 180) % 360;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  if (player.invulnerable > 0 &&
+      Math.floor(animationTime * 12) % 2 === 0) {
+    ctx.globalAlpha = 0.45;
+  }
+
+  // Shadow
+  ctx.fillStyle = "#080d18";
+  ctx.fillRect(-12, 10, 24, 7);
+
+  // Rainbow body
+  ctx.fillStyle = `hsl(${hue}, 100%, 60%)`;
+  ctx.fillRect(-10, -7, 20, 19);
+
+  ctx.fillStyle = `hsl(${(hue + 70) % 360}, 100%, 65%)`;
+  ctx.fillRect(-12, -14, 24, 9);
+
+  ctx.fillStyle = `hsl(${(hue + 140) % 360}, 100%, 60%)`;
+  ctx.fillRect(-9, 12, 7, 7);
+  ctx.fillRect(2, 12, 7, 7);
+
+  ctx.fillStyle = "#fff7ed";
+  ctx.fillRect(-6, -5, 4, 5);
+  ctx.fillRect(3, -5, 4, 5);
+
+  ctx.fillStyle = "#111827";
+  ctx.fillRect(-5, -3, 2, 3);
+  ctx.fillRect(4, -3, 2, 3);
+
+  ctx.restore();
+}
+
+function drawEnemy(enemy) {
+  const cx = enemy.x * TILE + TILE / 2;
+  const cy = enemy.y * TILE + TILE / 2;
+  const bob = Math.sin(animationTime * 5 + enemy.x) * 2;
+
+  ctx.save();
+  ctx.translate(cx, cy + bob);
+
+  ctx.fillStyle = "#5b1429";
+  ctx.fillRect(-13, 12, 26, 5);
+
+  ctx.fillStyle = "#dc354f";
+  ctx.fillRect(-13, -8, 26, 20);
+  ctx.fillRect(-9, -14, 18, 8);
+  ctx.fillRect(-13, 4, 5, 12);
+  ctx.fillRect(8, 4, 5, 12);
+
+  ctx.fillStyle = "#ff8a9a";
+  ctx.fillRect(-8, -10, 5, 3);
+
+  ctx.fillStyle = "#250817";
+  ctx.fillRect(-7, -5, 4, 6);
+  ctx.fillRect(4, -5, 4, 6);
+  ctx.fillRect(-3, 5, 7, 3);
+
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (map[y][x] === "#") {
+        drawWall(x, y);
+      } else {
+        drawFloor(x, y);
+
+        if (map[y][x] === "X") {
+          drawExit(x, y);
+        }
+      }
+    }
+  }
+
+  for (const enemy of enemies) drawEnemy(enemy);
+  drawPlayer();
+
+  if (state !== "playing") {
+    ctx.fillStyle = "rgba(3, 7, 18, 0.72)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = "center";
+    ctx.font = "bold 34px monospace";
+    ctx.fillStyle = state === "won" ? "#4ade80" : "#fb7185";
+    ctx.fillText(
+      state === "won" ? "YOU WIN!" : "GAME OVER",
+      canvas.width / 2,
+      canvas.height / 2
+    );
+
+    ctx.font = "16px monospace";
+    ctx.fillStyle = "white";
+    ctx.fillText(
+      "Press Restart to play again",
+      canvas.width / 2,
+      canvas.height / 2 + 35
+    );
+  }
+}
+
+function gameLoop(timestamp) {
+  const dt = lastTime
+    ? Math.min((timestamp - lastTime) / 1000, 0.05)
+    : 0;
+
+  lastTime = timestamp;
+  animationTime += dt;
+
+  if (player) {
+    player.invulnerable = Math.max(0, player.invulnerable - dt);
+  }
+
+  moveEnemies(dt);
+  draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+const directions = {
+  up: [0, -1],
+  down: [0, 1],
+  left: [-1, 0],
+  right: [1, 0]
+};
+
+function handleDirection(dir) {
+  if (!directions[dir]) return;
+  movePlayer(...directions[dir]);
+}
+
+document.addEventListener("keydown", event => {
+  const key = event.key.toLowerCase();
+
+  const keyMap = {
+    w: "up",
+    arrowup: "up",
+    s: "down",
+    arrowdown: "down",
+    a: "left",
+    arrowleft: "left",
+    d: "right",
+    arrowright: "right"
+  };
+
+  if (keyMap[key]) {
+    event.preventDefault();
+    handleDirection(keyMap[key]);
+  }
+});
+
+document.querySelectorAll("[data-dir]").forEach(button => {
+  button.addEventListener("click", () => {
+    handleDirection(button.dataset.dir);
+  });
+});
+
+// Swipe controls for touchscreens
+let touchStart = null;
+
+canvas.addEventListener("touchstart", event => {
+  const touch = event.changedTouches[0];
+  touchStart = { x: touch.clientX, y: touch.clientY };
+}, { passive: true });
+
+canvas.addEventListener("touchend", event => {
+  if (!touchStart) return;
+
+  const touch = event.changedTouches[0];
+  const dx = touch.clientX - touchStart.x;
+  const dy = touch.clientY - touchStart.y;
+
+  if (Math.max(Math.abs(dx), Math.abs(dy)) > 20) {
+    if (Math.abs(dx) > Math.abs(dy)) {
+      handleDirection(dx > 0 ? "right" : "left");
+    } else {
+      handleDirection(dy > 0 ? "down" : "up");
+    }
+  }
+
+  touchStart = null;
+}, { passive: true });
+
+document.getElementById("restart").addEventListener("click", startGame);
+
+startGame();
+requestAnimationFrame(gameLoop);
+
+})();
+</script>
+</body>
+</html>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rainbow Dungeon - 3 Floors</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 16px;
+  min-height: 100vh;
+  background: #0b1020;
+  color: white;
+  text-align: center;
+  font-family: monospace;
+}
+
+h1 { color: #facc15; }
+
+.game-layout {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.panel {
+  background: #151f32;
+  border: 2px solid #475569;
+  border-radius: 10px;
+  padding: 12px;
+  line-height: 1.8;
+}
+
+canvas {
+  display: block;
+  width: min(90vw, 600px);
+  height: auto;
+  border: 4px solid #64748b;
+  border-radius: 6px;
+  image-rendering: pixelated;
+  touch-action: none;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(3, 62px);
+  gap: 7px;
+  justify-content: center;
+  margin: 18px auto;
+}
+
+button {
+  min-width: 58px;
+  min-height: 54px;
+  border: 2px solid #64748b;
+  border-radius: 9px;
+  background: #26364f;
+  color: white;
+  font-size: 23px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:active { background: #0ea5e9; }
+.empty { visibility: hidden; }
+
+#message {
+  color: #facc15;
+  min-height: 24px;
+}
+
+#restart {
+  padding: 10px 20px;
+  font-size: 16px;
+}
+
+@media (max-width: 500px) {
+  body { padding: 8px; }
+  .game-layout { gap: 8px; }
+}
+</style>
+</head>
+
+<body>
+
+<h1>🌈 Rainbow Dungeon</h1>
+
+<div class="game-layout">
+  <div class="panel">
+    <div>Floor: <span id="floor">1 / 3</span></div>
+    <div>❤️ HP: <span id="health">5 / 5</span></div>
+    <div>👾 Enemies: <span id="enemyCount">2</span></div>
+    <div>👣 Steps: <span id="steps">0</span></div>
+    <hr>
+    <div>♥ = Healing Fountain</div>
+    <div>X = Next Floor</div>
+  </div>
+
+  <canvas id="game" width="600" height="600"></canvas>
+
+  <div class="panel">
+    <strong>CONTROLS</strong>
+    <p>WASD / Arrow keys</p>
+    <p>Touch buttons</p>
+    <p>Walk over ♥ to heal</p>
+    <p>Reach X to advance</p>
+    <p>Clear all 3 floors!</p>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="empty"></button>
+  <button data-dir="up">▲</button>
+  <button class="empty"></button>
+  <button data-dir="left">◀</button>
+  <button data-dir="down">▼</button>
+  <button data-dir="right">▶</button>
+</div>
+
+<p id="message">Find the exit and survive!</p>
+<button id="restart">Restart Game</button>
+
+<script>
+(() => {
+"use strict";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const TILE = 40;
+const COLS = 15;
+const ROWS = 15;
+const MAX_FLOORS = 3;
+
+const maps = [
+[
+"###############",
+"#P....#.......#",
+"#.##..#..###..#",
+"#.....#......X#",
+"###.#####.##..#",
+"#...#.....#...#",
+"#.#.#.###.#.#.#",
+"#...#.....#...#",
+"#.#####.###.#.#",
+"#.............#",
+"#.#####.###.#.#",
+"#.....#...#...#",
+"#.##..#...#.#.#",
+"#.............#",
+"###############"
+],
+[
+"###############",
+"#P....#.......#",
+"###.#.#.#####.#",
+"#...#.#.....#.#",
+"#.###.###.#.#.#",
+"#.....#...#...#",
+"#.#####.#####.#",
+"#.....#.......#",
+"#####.#.#####.#",
+"#.....#.....#.#",
+"#.#######.#.#.#",
+"#.........#...#",
+"#.###########.#",
+"#...........X.#",
+"###############"
+],
+[
+"###############",
+"#P............#",
+"#.###########.#",
+"#.#.........#.#",
+"#.#.#######.#.#",
+"#...#.....#...#",
+"###.#.###.###.#",
+"#...#.#.#.....#",
+"#.###.#.#####.#",
+"#.....#.....#.#",
+"#.#########.#.#",
+"#...........#.#",
+"#.###########.#",
+"#............X#",
+"###############"
+]
+];
+
+const floorConfigs = [
+  { hp: 5, enemyCount: 2, enemySpeed: 0.85 },
+  { hp: 6, enemyCount: 4, enemySpeed: 0.62 },
+  { hp: 7, enemyCount: 6, enemySpeed: 0.42 }
+];
+
+let map, player, enemies, fountains;
+let floorNumber, health, maxHealth, steps, state;
+let animationTime = 0;
+let lastTime = 0;
+
+const floorEl = document.getElementById("floor");
+const healthEl = document.getElementById("health");
+const enemyEl = document.getElementById("enemyCount");
+const stepsEl = document.getElementById("steps");
+const messageEl = document.getElementById("message");
+
+function isWall(x, y) {
+  return x < 0 || y < 0 ||
+    x >= COLS || y >= ROWS ||
+    map[y][x] === "#";
+}
+
+function isOccupied(x, y) {
+  return enemies.some(e => e.x === x && e.y === y);
+}
+
+function findOpenPosition(used = []) {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const x = 1 + Math.floor(Math.random() * (COLS - 2));
+    const y = 1 + Math.floor(Math.random() * (ROWS - 2));
+
+    if (map[y][x] !== ".") continue;
+    if (player && player.x === x && player.y === y) continue;
+    if (isOccupied(x, y)) continue;
+    if (used.some(p => p.x === x && p.y === y)) continue;
+
+    return { x, y };
+  }
+
+  // Fallback: search every tile.
+  for (let y = 1; y < ROWS - 1; y++) {
+    for (let x = 1; x < COLS - 1; x++) {
+      if (map[y][x] !== ".") continue;
+      if (player && player.x === x && player.y === y) continue;
+      if (isOccupied(x, y)) continue;
+      if (used.some(p => p.x === x && p.y === y)) continue;
+      return { x, y };
+    }
+  }
+
+  return null;
+}
+
+function updateStats() {
+  floorEl.textContent = `${floorNumber} / ${MAX_FLOORS}`;
+  healthEl.textContent = `${health} / ${maxHealth}`;
+  enemyEl.textContent = enemies.length;
+  stepsEl.textContent = steps;
+}
+
+function startGame() {
+  floorNumber = 1;
+  health = 5;
+  maxHealth = 5;
+  steps = 0;
+  state = "playing";
+  loadFloor(false);
+}
+
+function loadFloor(advance) {
+  const config = floorConfigs[floorNumber - 1];
+
+  map = maps[floorNumber - 1].map(row => row.split(""));
+
+  let start = { x: 1, y: 1 };
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (map[y][x] === "P") {
+        start = { x, y };
+        map[y][x] = ".";
+      }
+    }
+  }
+
+  player = {
+    x: start.x,
+    y: start.y,
+    invulnerable: 0
+  };
+
+  maxHealth = config.hp;
+
+  // On a new floor, increase the maximum HP and restore 2 HP.
+  // On floor 1, start with 5 HP.
+  if (advance) {
+    health = Math.min(maxHealth, health + 2);
+  } else {
+    health = maxHealth;
+  }
+
+  enemies = [];
+  fountains = [];
+
+  // Place enemies in open corridors.
+  for (let i = 0; i < config.enemyCount; i++) {
+    const pos = findOpenPosition();
+    if (pos) {
+      enemies.push({
+        x: pos.x,
+        y: pos.y,
+        moveTimer: Math.random() * config.enemySpeed
+      });
+    }
+  }
+
+  // Place two healing fountains on each floor.
+  for (let i = 0; i < 2; i++) {
+    const pos = findOpenPosition(fountains);
+    if (pos) fountains.push(pos);
+  }
+
+  updateStats();
+  messageEl.textContent = advance
+    ? `Floor ${floorNumber}! You recovered 2 HP.`
+    : "Find the exit X and healing fountains ♥!";
+  draw();
+}
+
+function movePlayer(dx, dy) {
+  if (state !== "playing") return;
+
+  const nx = player.x + dx;
+  const ny = player.y + dy;
+
+  if (isWall(nx, ny)) {
+    messageEl.textContent = "A wall blocks your way!";
+    return;
+  }
+
+  steps++;
+
+  if (map[ny][nx] === "X") {
+    if (floorNumber < MAX_FLOORS) {
+      floorNumber++;
+      loadFloor(true);
+      return;
+    }
+
+    player.x = nx;
+    player.y = ny;
+    state = "won";
+    messageEl.textContent = "🏆 You cleared all 3 floors!";
+    updateStats();
+    draw();
+    return;
+  }
+
+  const enemy = enemies.find(e => e.x === nx && e.y === ny);
+
+  if (enemy) {
+    health--;
+    enemies = enemies.filter(e => e !== enemy);
+
+    if (health <= 0) {
+      health = 0;
+      state = "lost";
+      messageEl.textContent = "💀 Game Over! Press Restart.";
+    } else {
+      messageEl.textContent = "⚔️ Enemy defeated! You lost 1 HP.";
+    }
+
+    updateStats();
+    draw();
+    return;
+  }
+
+  player.x = nx;
+  player.y = ny;
+
+  // Healing fountain: restores 2 HP and disappears after use.
+  const fountainIndex = fountains.findIndex(
+    f => f.x === nx && f.y === ny
+  );
+
+  if (fountainIndex !== -1) {
+    if (health < maxHealth) {
+      const recovered = Math.min(2, maxHealth - health);
+      health += recovered;
+      messageEl.textContent = `✨ Healing fountain! +${recovered} HP.`;
+    } else {
+      messageEl.textContent = "✨ Healing fountain: your HP is already full!";
+    }
+
+    fountains.splice(fountainIndex, 1);
+  } else {
+    messageEl.textContent = "Explore the dungeon!";
+  }
+
+  updateStats();
+  draw();
+}
+
+function moveEnemies(dt) {
+  if (state !== "playing") return;
+
+  const speed = floorConfigs[floorNumber - 1].enemySpeed;
+
+  for (const enemy of enemies) {
+    enemy.moveTimer += dt;
+    if (enemy.moveTimer < speed) continue;
+    enemy.moveTimer = 0;
+
+    const dx = player.x - enemy.x;
+    const dy = player.y - enemy.y;
+
+    let choices = [];
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      if (dx !== 0) choices.push([Math.sign(dx), 0]);
+      if (dy !== 0) choices.push([0, Math.sign(dy)]);
+    } else {
+      if (dy !== 0) choices.push([0, Math.sign(dy)]);
+      if (dx !== 0) choices.push([Math.sign(dx), 0]);
+    }
+
+    const randomMoves = [[0,-1],[0,1],[-1,0],[1,0]];
+    choices.push(randomMoves[Math.floor(Math.random() * 4)]);
+
+    for (const [mx, my] of choices) {
+      const nx = enemy.x + mx;
+      const ny = enemy.y + my;
+
+      if (isWall(nx, ny)) continue;
+      if (nx === player.x && ny === player.y) continue;
+      if (enemies.some(e => e !== enemy && e.x === nx && e.y === ny)) continue;
+
+      enemy.x = nx;
+      enemy.y = ny;
+      break;
+    }
+  }
+}
+
+function drawFloor(x, y) {
+  const px = x * TILE, py = y * TILE;
+
+  ctx.fillStyle = (x + y) % 2 ? "#172337" : "#1b293d";
+  ctx.fillRect(px, py, TILE, TILE);
+
+  ctx.strokeStyle = "#0b1220";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+
+  ctx.fillStyle = "#253247";
+  ctx.fillRect(px + 7, py + 7, 2, 2);
+  ctx.fillRect(px + 29, py + 25, 3, 2);
+}
+
+function drawWall(x, y) {
+  const px = x * TILE, py = y * TILE;
+
+  ctx.fillStyle = "#56647a";
+  ctx.fillRect(px, py, TILE, TILE);
+
+  ctx.fillStyle = "#718096";
+  ctx.fillRect(px + 3, py + 3, TILE - 6, 5);
+  ctx.fillRect(px + 3, py + 8, 5, TILE - 11);
+
+  ctx.fillStyle = "#354258";
+  ctx.fillRect(px + 5, py + TILE - 8, TILE - 8, 5);
+  ctx.fillRect(px + TILE - 8, py + 8, 5, TILE - 16);
+
+  ctx.strokeStyle = "#263247";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+}
+
+function drawExit(x, y) {
+  const px = x * TILE, py = y * TILE;
+
+  ctx.fillStyle = "#14532d";
+  ctx.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
+
+  ctx.strokeStyle = "#4ade80";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(px + 7, py + 7, TILE - 14, TILE - 14);
+
+  ctx.strokeStyle = "#86efac";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(px + 12, py + 12);
+  ctx.lineTo(px + 28, py + 28);
+  ctx.moveTo(px + 28, py + 12);
+  ctx.lineTo(px + 12, py + 28);
+  ctx.stroke();
+}
+
+function drawFountain(f) {
+  const cx = f.x * TILE + TILE / 2;
+  const cy = f.y * TILE + TILE / 2;
+
+  ctx.fillStyle = "#075985";
+  ctx.fillRect(cx - 13, cy - 10, 26, 22);
+
+  ctx.strokeStyle = "#38bdf8";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(cx - 13, cy - 10, 26, 22);
+
+  ctx.fillStyle = "#7dd3fc";
+  ctx.fillRect(cx - 9, cy - 6, 18, 14);
+
+  ctx.fillStyle = "#fda4af";
+  ctx.font = "bold 22px monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("♥", cx, cy);
+}
+
+function drawPlayer() {
+  const cx = player.x * TILE + TILE / 2;
+  const cy = player.y * TILE + TILE / 2;
+  const hue = (animationTime * 180) % 360;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  ctx.fillStyle = "#080d18";
+  ctx.fillRect(-12, 10, 24, 7);
+
+  ctx.fillStyle = `hsl(${hue},100%,60%)`;
+  ctx.fillRect(-10, -7, 20, 19);
+
+  ctx.fillStyle = `hsl(${(hue + 70) % 360},100%,65%)`;
+  ctx.fillRect(-12, -14, 24, 9);
+
+  ctx.fillStyle = `hsl(${(hue + 140) % 360},100%,60%)`;
+  ctx.fillRect(-9, 12, 7, 7);
+  ctx.fillRect(2, 12, 7, 7);
+
+  ctx.fillStyle = "#fff7ed";
+  ctx.fillRect(-6, -5, 4, 5);
+  ctx.fillRect(3, -5, 4, 5);
+
+  ctx.fillStyle = "#111827";
+  ctx.fillRect(-5, -3, 2, 3);
+  ctx.fillRect(4, -3, 2, 3);
+
+  ctx.restore();
+}
+
+function drawEnemy(enemy) {
+  const cx = enemy.x * TILE + TILE / 2;
+  const cy = enemy.y * TILE + TILE / 2;
+  const bob = Math.sin(animationTime * 5 + enemy.x) * 2;
+
+  ctx.save();
+  ctx.translate(cx, cy + bob);
+
+  ctx.fillStyle = "#5b1429";
+  ctx.fillRect(-13, 12, 26, 5);
+
+  ctx.fillStyle = "#dc354f";
+  ctx.fillRect(-13, -8, 26, 20);
+  ctx.fillRect(-9, -14, 18, 8);
+  ctx.fillRect(-13, 4, 5, 12);
+  ctx.fillRect(8, 4, 5, 12);
+
+  ctx.fillStyle = "#250817";
+  ctx.fillRect(-7, -5, 4, 6);
+  ctx.fillRect(4, -5, 4, 6);
+
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (map[y][x] === "#") {
+        drawWall(x, y);
+      } else {
+        drawFloor(x, y);
+        if (map[y][x] === "X") drawExit(x, y);
+      }
+    }
+  }
+
+  for (const f of fountains) drawFountain(f);
+  for (const e of enemies) drawEnemy(e);
+  drawPlayer();
+
+  if (state !== "playing") {
+    ctx.fillStyle = "rgba(3,7,18,0.78)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 34px monospace";
+    ctx.fillStyle = state === "won" ? "#4ade80" : "#fb7185";
+    ctx.fillText(
+      state === "won" ? "YOU WIN!" : "GAME OVER",
+      canvas.width / 2,
+      canvas.height / 2
+    );
+
+    ctx.font = "16px monospace";
+    ctx.fillStyle = "white";
+    ctx.fillText(
+      "Press Restart to play again",
+      canvas.width / 2,
+      canvas.height / 2 + 36
+    );
+  }
+}
+
+const directions = {
+  up: [0,-1],
+  down: [0,1],
+  left: [-1,0],
+  right: [1,0]
+};
+
+function handleDirection(dir) {
+  if (directions[dir]) movePlayer(...directions[dir]);
+}
+
+document.addEventListener("keydown", event => {
+  const key = event.key.toLowerCase();
+
+  const keyMap = {
+    w:"up", arrowup:"up",
+    s:"down", arrowdown:"down",
+    a:"left", arrowleft:"left",
+    d:"right", arrowright:"right"
+  };
+
+  if (keyMap[key]) {
+    event.preventDefault();
+    handleDirection(keyMap[key]);
+  }
+});
+
+document.querySelectorAll("[data-dir]").forEach(button => {
+  button.addEventListener("click", () => {
+    handleDirection(button.dataset.dir);
+  });
+});
+
+let touchStart = null;
+
+canvas.addEventListener("touchstart", event => {
+  const t = event.changedTouches[0];
+  touchStart = { x: t.clientX, y: t.clientY };
+}, { passive: true });
+
+canvas.addEventListener("touchend", event => {
+  if (!touchStart) return;
+
+  const t = event.changedTouches[0];
+  const dx = t.clientX - touchStart.x;
+  const dy = t.clientY - touchStart.y;
+
+  if (Math.max(Math.abs(dx), Math.abs(dy)) > 20) {
+    if (Math.abs(dx) > Math.abs(dy)) {
+      handleDirection(dx > 0 ? "right" : "left");
+    } else {
+      handleDirection(dy > 0 ? "down" : "up");
+    }
+  }
+
+  touchStart = null;
+}, { passive: true });
+
+document.getElementById("restart").addEventListener("click", startGame);
+
+function gameLoop(timestamp) {
+  const dt = lastTime
+    ? Math.min((timestamp - lastTime) / 1000, 0.05)
+    : 0;
+
+  lastTime = timestamp;
+  animationTime += dt;
+
+  if (player) {
+    player.invulnerable = Math.max(0, player.invulnerable - dt);
+  }
+
+  moveEnemies(dt);
+  draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+startGame();
+requestAnimationFrame(gameLoop);
+
+})();
+</script>
+</body>
+</html>
